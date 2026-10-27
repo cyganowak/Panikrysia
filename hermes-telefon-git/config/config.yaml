@@ -1,0 +1,89 @@
+# Ustawienia hermes-telefon (cx300-fixed)
+
+# Po ilu sekundach zadania Hermesa (hook) telefon ma zadzwonic po jego zakonczeniu
+prog_dzwonienia_s: 60
+
+# Wynik krotszy niz tyle sekund pracy = od razu z glosnika (tryb zwykly);
+# dluzszy = telefon dzwoni
+krotka_odpowiedz_s: 60
+
+# Ile sekund dzwonic, zanim wiadomosc trafi do "czekajacych"
+czas_dzwonienia_s: 8
+
+# Gniazdo lokalne, przez ktore hook rozmawia z daemonem
+gniazdo: /run/user/1000/hermes-telefon.sock
+
+telefon:
+  vendor_id: 0x095d          # potwierdzone w lsusb
+  product_id: 0x9201
+  urzadzenie_dzwieku: "Polycom CX300"   # fragment nazwy z wpctl status
+
+# Tryby glosu przelacza sie klawiszami: 1 = zwykly, 2 = glosnik, 3 = cichy
+# (drugie nacisniecie 2 lub 3 wraca do zwyklego). Tryb przetrwa restart.
+# * = powtorz ostatni komunikat.
+# 1 = odsluchaj czekajace wiadomosci przez glosnik, bez podnoszenia sluchawki
+#     (to samo robi przycisk SPK, gdy jakas wiadomosc czeka).
+# # = usun (skasuj) wszystkie czekajace wiadomosci.
+tryby:
+  # true = przycisk SPK dziala jak podniesienie sluchawki (rozmowa bez rak:
+  # SPK wlacza sluchanie, ponowne SPK wysyla). Do sprawdzenia, czy mikrofon
+  # w podstawie nagrywa przy SPK - dlatego domyslnie wylaczone.
+  spk_jak_sluchawka: false
+
+tts:
+  silnik: piper
+  python: ~/.venvs/hermes-telefon/bin/python
+  skrypt: ~/.local/bin/telefon_tts.py
+  piper: ~/.venvs/hermes-telefon/bin/piper
+  model: ~/.local/share/piper/pl_PL-gosia-medium.onnx
+  katalog_cache: ~/.cache/hermes-telefon/nagrania
+
+dzwonek: ~/.config/hermes-telefon/dzwonek.wav
+
+stt:
+  urzadzenie: plughw:4,0        # ALSA mikrofonu CX300 (numer karty = /proc/asound/cards)
+  model: small                  # faster-whisper
+  dlugosc_s: 30                 # maks. dlugosc nagrania (konczy je odlozenie)
+
+hermes:
+  bin: /home/unnamed/.local/share/mise/installs/pipx-hermes-agent/latest/bin/hermes
+
+# Wyswietlacz telefonu (2 linijki)
+ekran:
+  # Ile znakow miesci linia. 20 dzialalo poprawnie. Prawdziwa wartosc ustal
+  # testem: python3 cx300_test_ekranu.py (instrukcja w README_POPRAWKI.md).
+  # NIE wpisuj liczby "na oko" - za duza = zawijanie i smieci na ekranie.
+  szerokosc: 20
+  polskie_znaki: true        # ekran CX300 przyjmuje UTF-16
+  komunikat_chwilowy_s: 4    # minimum; dlugi tekst stoi tyle, by przeszly wszystkie strony
+  strona_s: 2.5              # dluzszy tekst w linii 2 = strony po calych slowach, co tyle sekund
+  # auto   = czysc tylko gdy linia sie skrocila (domyslnie, rzadkie migniecie)
+  # nigdy  = bez czyszczenia (jak tSIP); wybierz, jesli test pokaze brak resztek
+  # zawsze = czysc co klatke (stare zachowanie, migocze)
+  czyszczenie: auto
+
+klawisz_nagrywania: "ctrl+b"
+
+# Numer pulpitu w Hyprlandzie -> jak powiedziec "na ktorym"
+pulpity:
+  1: "na jedynce"
+  2: "na dwojce"
+  3: "na trojce"
+  4: "na czworce"
+  5: "na pulpicie do gier"
+
+# Programy: slowo w komendzie -> jak go nazwac w mowie
+programy:
+  steam: Steam
+  firefox: Firefoxa
+  chromium: przegladarke
+  vesktop: Discorda
+  lutris: Lutrisa
+
+# Zwroty potwierdzen. {program} i {pulpit} wstawia skrypt.
+# Mowi je pani Krysia, sekretarka, do szefa.
+zwroty:
+  otwieram_na_pulpicie: "Otwieram {program} {pulpit}."
+  otwieram: "Otwieram {program}."
+  ogolny: "Zaraz sie tym zajme."
+  koniec_zadania: "Szefie, mam to. {podsumowanie}"

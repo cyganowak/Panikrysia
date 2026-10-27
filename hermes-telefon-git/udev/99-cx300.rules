@@ -1,0 +1,3 @@
+# Dostęp do Polycom CX300 (widełki, diody, ekran) dla grupy input bez roota.
+# (uaccess nie zadzialal na tej maszynie, wiec klasyczna metoda group+mode)
+KERNEL=="hidraw*", ATTRS{idVendor}=="095d", ATTRS{idProduct}=="9201", GROUP="input", MODE="0660"

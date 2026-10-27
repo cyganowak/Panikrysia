@@ -1,0 +1,65 @@
+#!/usr/bin/python3
+"""telefon - sterowanie telefonem stacjonarnym (Polycom CX300) z Hermesa.
+
+Uzycie:
+  telefon dzwon "Wiadomosc do odczytania" [opis]   - zadzwon, po odebraniu odczytaj
+  telefon powiedz "Tekst"                           - powiedz bez dzwonka
+  telefon status                                    - sprawdz, czy daemon zyje
+
+Wysyla JSON na gniazdo daemona hermes-telefon. Cisza, gdy daemon nie dziala.
+"""
+import json
+import os
+import socket
+import sys
+from pathlib import Path
+
+import yaml
+
+GNIASDO = yaml.safe_load(
+    open(Path("~/.config/hermes-telefon/config.yaml").expanduser(),
+         encoding="utf-8"))["gniazdo"]
+
+
+def wyslij(wiadomosc: dict):
+    try:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+        s.sendto(json.dumps(wiadomosc).encode(), GNIASDO)
+    except OSError:
+        print("telefon: daemon hermes-telefon nie odpowiada",
+              file=sys.stderr)
+        sys.exit(1)
+
+
+def main():
+    if len(sys.argv) < 2:
+        print(__doc__)
+        return
+    akcja = sys.argv[1]
+    if akcja in ("dzwon", "zadzwoń", "zadzwon"):
+        tekst = sys.argv[2] if len(sys.argv) > 2 else "Szefie, telefon do Ciebie."
+        opis = sys.argv[3] if len(sys.argv) > 3 else tekst[:40]
+        wyslij({"typ": "zadzwon", "tekst": tekst, "opis": opis, "czas": 0,
+               "dzwonek": True})   # jawne "dzwon" = dzwonek (tryb cichy i tak wygrywa)
+        print("dzwonie")
+    elif akcja in ("powiedz", "powiedz"):
+        wyslij({"typ": "powiedz", "tekst": sys.argv[2]})
+        print("mowie")
+    elif akcja == "status":
+        try:
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+            s.settimeout(2)
+            # musi byc zbindowany, inaczej Python 3.14 nie zna nadawcy
+            s.bind("\0telefon-probe-%d" % os.getpid())
+            s.sendto(b'{"typ":"ping"}', GNIASDO)
+            print(s.recvfrom(64)[0].decode() or "ok")
+        except OSError:
+            print("daemon nie odpowiada")
+            sys.exit(1)
+    else:
+        print(__doc__)
+        sys.exit(2)
+
+
+if __name__ == "__main__":
+    main()

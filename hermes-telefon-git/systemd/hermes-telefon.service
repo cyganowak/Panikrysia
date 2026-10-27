@@ -1,0 +1,12 @@
+[Unit]
+Description=hermes-telefon: Polycom CX300 jako telefon do Hermesa
+After=pipewire.service wireplumber.service graphical-session.target
+
+[Service]
+Environment=PATH=%h/.local/share/mise/installs/pipx-hermes-agent/latest/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=%h/.venvs/hermes-telefon/bin/python %h/.local/bin/telefon_daemon.py
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
