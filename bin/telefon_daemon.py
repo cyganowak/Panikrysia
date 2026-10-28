@@ -60,6 +60,9 @@ KLAWISZE_TRYBU = {0x03: "glosnik", 0x04: "cichy"}             # 2 / 3
 KLAWISZ_POWTORZ = 0x0B                                         # *
 KLAWISZ_POCZTA = 0x02                                          # 1 = odsłuchaj pocztę
 KLAWISZ_POCZTA_G = 0x0C                                        # # = poczta na głośnik
+KLAWISZ_TRANSKRYPT = 0x0A                                      # 9 = nagraj konwersacje -> transkrypt
+KLAWISZ_RING = 0x05                                            # 4 = tryb ring (kazda wiadomosc dzwoni)
+RING_STAN = Path("~/.cache/hermes-telefon/ring.json").expanduser()
 
 # Kolory diody statusu (raport 0x16)
 ZIELONY, CZERWONY, WYLACZONY = 0x01, 0x03, 0x07
@@ -550,8 +553,11 @@ class Daemon:
         self.odebrano = threading.Event()
         self.odlozono = threading.Event()
         self.zalegle: list[tuple[Path, str]] = []    # (plik, opis)
+        self._trk = None          # nagrywanie konwersacji (klawisz 9): (proc, wav, start)
         self.ostatni_plik: Path | None = None        # do klawisza *
         self.krotka_s = self.cfg.get("krotka_odpowiedz_s", 60)
+        self.ring = self._wczytaj_ring()           # tryb ring (klawisz 4)
+        self.ring_s = self.cfg.get("ring_czas_s", 30)
         self._dzwoni = False
         self._rozmowa_lock = threading.Lock()        # jedna rozmowa naraz
         self._blink_stop: threading.Event | None = None
@@ -572,6 +578,26 @@ class Daemon:
             return tryb if tryb in ("glosnik", "cichy") else None
         except (OSError, ValueError):
             return None
+
+    # ============================================================ tryb ring (klawisz 4)
+    def _wczytaj_ring(self) -> bool:
+        try:
+            return bool(json.loads(RING_STAN.read_text(encoding="utf-8")).get("ring"))
+        except (OSError, ValueError):
+            return False
+
+    def ring_przelacz(self):
+        self.ring = not self.ring
+        try:
+            RING_STAN.parent.mkdir(parents=True, exist_ok=True)
+            RING_STAN.write_text(json.dumps({"ring": self.ring}), encoding="utf-8")
+        except OSError:
+            pass
+        if self.ring:
+            self.ekran.pokaz_chwilowo("Tryb RING wlaczony", f"ring {self.ring_s}s", sek=3)
+        else:
+            self.ekran.pokaz_chwilowo("Tryb RING wylaczony", "", sek=3)
+        log.info("tryb ring: %s", "WL" if self.ring else "WYL")
 
     def ustaw_tryb(self, tryb):
         self.tryb_glosu = tryb
@@ -605,6 +631,62 @@ class Daemon:
         elif kod == KLAWISZ_POCZTA_G:
             # # = kasuj czekajace wiadomosci
             self.polecenia.put({"typ": "usun_zalegle"})
+        elif kod == KLAWISZ_TRANSKRYPT:
+            # 9 = wlacz/wylacz nagrywanie konwersacji (mikrofon glosnikowy)
+            self.polecenia.put({"typ": "transkrypt_przelacz"})
+        elif kod == KLAWISZ_RING:
+            # 4 = wlacz/wylacz tryb ring (kazda wiadomosc dzwoni, potem poczta)
+            self.ring_przelacz()
+
+    # ============================================================ transkrypt konwersacji (klawisz 9)
+    def _transkrypt_przelacz(self):
+        if self._trk:
+            proc, wav, start = self._trk
+            self._trk = None
+            try:
+                proc.terminate(); proc.wait(timeout=3)
+            except Exception:                        # noqa: BLE001
+                proc.kill()
+            time.sleep(0.2)
+            self.ekran.pokaz_chwilowo("Transkrypuje...", wav.stem[:18], sek=30)
+            threading.Thread(target=self._transkrypt_zakoncz,
+                             args=(wav, start), daemon=True).start()
+            return
+        stt = self.cfg.get("stt", {})
+        katalog = Path("~/Documents/nagrania").expanduser()
+        katalog.mkdir(parents=True, exist_ok=True)
+        ts = time.strftime("%Y-%m-%d_%H%M%S")
+        wav = katalog / f"konwersacja_{ts}.wav"
+        try:
+            proc = subprocess.Popen(
+                ["arecord", "-D", stt.get("urzadzenie", "plughw:4,0"),
+                 "-f", "S16_LE", "-r", "16000", "-c", "1", "-t", "wav", str(wav)],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError:
+            self.ekran.pokaz_chwilowo("Mikrofon zajety", "", sek=3)
+            return
+        self._trk = (proc, wav, time.time())
+        log.info("transkrypt: nagrywanie START -> %s", wav.name)
+        self.ekran.pokaz_chwilowo("Nagrywam konwersacje", "9 = stop", sek=3)
+
+    def _transkrypt_zakoncz(self, wav: Path, start: float):
+        try:
+            import soundfile as sf
+            dane, _ = sf.read(wav)
+            segm, _i = self._model_stt().transcribe(
+                dane.astype("float32"), language="pl", vad_filter=True)
+            tekst = "\n".join(s.text.strip() for s in segm if s.text.strip())
+        except Exception:                            # noqa: BLE001
+            log.exception("transkrypt STT")
+            self.ekran.pokaz_chwilowo("Blad transkryptu", "")
+            return
+        dlugosc = (time.time() - start) / 60
+        txt = wav.with_suffix(".txt")
+        txt.write_text(
+            f"=== Konwersacja {wav.stem[12:]}, okolo {dlugosc:.0f} min ===\n"
+            + (tekst or "(cisza — nic nie slychac)") + "\n", encoding="utf-8")
+        log.info("transkrypt ZAPISANY: %s (%d znakow)", txt.name, len(tekst))
+        self.ekran.pokaz_chwilowo("Transkrypt:", txt.name[-18:], sek=4)
 
     # ============================================================ diody
     def _czerwony_blink(self):
@@ -638,6 +720,8 @@ class Daemon:
             self._zostaw(plik, opis)          # szef wlasnie rozmawia z Krysia
         elif self.telefon.podniesiona:
             self.dzwiek.graj(plik)
+        elif self.ring:
+            self.zadzwon(plik, opis, czas)    # tryb ring: kazda wiadomosc dzwoni
         elif self.tryb_glosu == "cichy":
             self._zostaw(plik, opis)
         elif self.tryb_glosu == "glosnik" or (czas < self.krotka_s
@@ -725,7 +809,9 @@ class Daemon:
     def obsluz(self, p: dict):
         typ = p.get("typ")
         try:
-            if typ == "powiedz":              # potwierdzenie z hooka
+            if typ == "transkrypt_przelacz":    # klawisz 9
+                self._transkrypt_przelacz()
+            elif typ == "powiedz":              # potwierdzenie z hooka
                 if p.get("ekran"):
                     self.ekran.pokaz_chwilowo(*p["ekran"])
                 cicho = (self.tryb_glosu == "cichy"
@@ -893,14 +979,15 @@ class Daemon:
                   "programy i fakty z wczesniejszych polecen szefa - "
                   "'to', 'ten plik', 'on' odnosza sie do wczesniejszej "
                   "rozmowy. "
-                  "ZASADY BEZPIECZENSTWA: NIGDY nie zabijaj, nie zamykaj "
-                  "i nie restartuj okien, terminali ani procesow - nie "
-                  "uzywaj pkill, killall, kill, hyprctl dispatch "
-                  "closewindow ani killactive. Okna i terminale naleza "
-                  "do szefa. Wolno ci tylko otwierac nowe okna i "
-                  "przelaczac pulpity. Jesli polecenie brzmi jak "
-                  "zamykanie okien - odmow jednym zdaniem. "
-                  "Polecenie szefa: " + tekst)
+                  "ZASADY BEZPIECZENSTWA: Wolno ci ZAMYKAC zwykle programy "
+                  "(pkill nazwa, hyprctl dispatch killactive) - ale NIGDY "
+                  "terminala (kitty, foot, alacritty, wezterm, xterm, "
+                  "konsole) ani procesu telefon_daemon, ydotoold, triki. "
+                  "Zabijanie terminala albo wlasnej sluzby zostalo technicznie "
+                  "zablokowane - zostaniesz o tym uprzedzona. Przed "
+                  "zamknieciem aktywnego okna upewnij sie przez 'hyprctl "
+                  "-j activewindow', ze to nie terminal. Zamykaj tylko to, "
+                  "o co szef wyraźnie prosil. Polecenie szefa: " + tekst)
         cmd_base = [self._hermes_bin, "chat", "-q", prompt, "-Q",
                     "--accept-hooks", "--yolo", "--max-turns", "6",
                     "--source", ZRODLO]
